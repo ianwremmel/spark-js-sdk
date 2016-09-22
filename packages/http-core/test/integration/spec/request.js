@@ -281,16 +281,11 @@ describe(`http-core`, function() {
                 body: f,
                 json: false,
                 // Note: setting response type so the `reflect()ed` response is in
-                // a form we can use, this is not need for normal file uploads.
-                responseType: `blob`,
-                // Note: setting content type here because IE doesn`t read it
-                // correctly from the fixture. This shouldn`t be needed in normal
-                // operation.
-                headers: {
-                  'content-type': `image/png`
-                }
+                // a form we can use, this is not needed for normal file uploads.
+                responseType: `blob`
               })
               .then((res) => {
+                assert.equal(res.body.type, f.type);
                 return assert.eventually.isTrue(file.isMatchingFile(res.body, f));
               });
             });

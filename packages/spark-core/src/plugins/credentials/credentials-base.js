@@ -10,6 +10,7 @@ import {clone, has, isObject, pick} from 'lodash';
 import grantErrors from './grant-errors';
 import querystring from 'querystring';
 import SparkPlugin from '../../lib/spark-plugin';
+import {persist, waitForValue} from '../../lib/storage';
 
 /**
  * Helper. Returns just the response body
@@ -95,7 +96,9 @@ const CredentialsBase = SparkPlugin.extend({
     return this.authorize(...args);
   },
 
-  authorize: oneFlight(`authorize`, function authenticate(options) {
+  @oneFlight
+  @waitForValue(`authorization`)
+  authorize(options) {
     /* eslint no-invalid-this: [0] */
     this._isAuthenticating = true;
     options = options || {};
@@ -134,9 +137,11 @@ const CredentialsBase = SparkPlugin.extend({
 
     this._isAuthenticating = false;
     return Promise.reject(new Error(`not enough parameters to authenticate`));
-  }),
+  },
 
-  getAuthorization: oneFlight(`getAuthorization`, function getAuthorization() {
+  @oneFlight
+  @waitForValue(`authorization`)
+  getAuthorization() {
     if (this.isAuthenticated) {
       if (this.isExpired) {
         if (this.canRefresh) {
@@ -151,9 +156,11 @@ const CredentialsBase = SparkPlugin.extend({
     }
 
     return Promise.reject(new Error(`not authenticated`));
-  }),
+  },
 
-  getClientAuthorization: oneFlight(`getClientCredentialsAuthorization`, function getClientCredentialsAuthorization() {
+  @oneFlight
+  @waitForValue(`clientAuthorization`)
+  getClientCredentialsAuthorization() {
     let promise;
     if (!this.clientAuthorization || !this.clientAuthorization.isAuthenticated || this.clientAuthorization.isExpired) {
       promise = this.requestClientCredentialsGrant();
@@ -164,7 +171,13 @@ const CredentialsBase = SparkPlugin.extend({
 
     return promise
       .then(() => this.clientAuthorization.toString());
-  }),
+  },
+
+  @persist(`authorization`)
+  @persist(`clientAuthorization`)
+  initialize(...args) {
+    return Reflect.apply(SparkPlugin.prototype.initialize, this, args);
+  },
 
   /**
    * @returns {Promise}
@@ -176,6 +189,8 @@ const CredentialsBase = SparkPlugin.extend({
     ].map((key) => {
       if (this[key]) {
         return this[key].revoke()
+          .then(() => this.unset(key))
+          .then(() => this.boundedStorage.del(key))
           .catch((reason) => {
             this.logger.error(`credentials: ${key} revocation falied`, reason);
           });
@@ -191,7 +206,8 @@ const CredentialsBase = SparkPlugin.extend({
    * appears unexpired
    * @returns {Promise} Resolves when credentials have been refreshed
    */
-  refresh: oneFlight(`refresh`, function refresh(options) {
+  @oneFlight
+  refresh(options) {
     /* eslint no-invalid-this: [0] */
     this.logger.info(`credentials: refresh requested`);
 
@@ -207,9 +223,10 @@ const CredentialsBase = SparkPlugin.extend({
     return this.authorization.refresh(options)
       .then(this._pushAuthorization.bind(this))
       .catch(this._handleRefreshFailure.bind(this));
-  }),
+  },
 
-  requestAuthorizationCodeGrant: oneFlight(`requestAuthorizationCodeGrant`, function requestAuthorizationCodeGrant(options) {
+  @oneFlight
+  requestAuthorizationCodeGrant(options) {
     const vars = {
       'oauth.client_id': `CLIENT_ID`,
       'oauth.client_secret': `CLIENT_SECRET`,
@@ -258,9 +275,10 @@ const CredentialsBase = SparkPlugin.extend({
         const ErrorConstructor = grantErrors.select(res.body.error);
         return Promise.reject(new ErrorConstructor(res._res || res));
       });
-  }),
+  },
 
-  requestClientCredentialsGrant: oneFlight(`requestClientCredentialsGrant`, function requestClientCredentialsGrant(options) {
+  @oneFlight
+  requestClientCredentialsGrant(options) {
     const vars = {
       'oauth.client_id': `CLIENT_ID`,
       'oauth.client_secret': `CLIENT_SECRET`
@@ -307,9 +325,11 @@ const CredentialsBase = SparkPlugin.extend({
         const ErrorConstructor = grantErrors.select(res.body.error);
         return Promise.reject(new ErrorConstructor(res._res || res));
       });
-  }),
+  },
 
-  requestSamlExtensionGrant: oneFlight(`requestSamlExtensionGrant`, retry(function requestSamlExtensionGrant(options) {
+  @oneFlight
+  @retry
+  requestSamlExtensionGrant(options) {
     options = options || {};
     options.scope = options.scope || this.config.oauth.scope;
 
@@ -327,7 +347,7 @@ const CredentialsBase = SparkPlugin.extend({
         const ErrorConstructor = grantErrors.select(res.body.error);
         return Promise.reject(new ErrorConstructor(res._res || res));
       });
-  })),
+  },
 
   set(key, value) {
     let attrs;
@@ -366,7 +386,7 @@ const CredentialsBase = SparkPlugin.extend({
     })}`;
   },
 
-  _buildOAuthUrl: function _buildOAuthUrl(options) {
+  _buildOAuthUrl(options) {
     /* eslint camelcase: [0] */
     const fields = [
       `client_id`,
@@ -409,7 +429,8 @@ const CredentialsBase = SparkPlugin.extend({
    * @private
    * @return {Promise} Resolves with the bot's credentials.
    */
-  _getOauthBearerToken: oneFlight(`_getOauthBearerToken`, function _getOauthBearerToken(options, samlData) {
+   @oneFlight
+  _getOauthBearerToken(options, samlData) {
     this.logger.info(`credentials: exchanging SAML Bearer Token for OAuth Bearer Token`);
 
     const vars = {
@@ -440,7 +461,7 @@ const CredentialsBase = SparkPlugin.extend({
       },
       shouldRefreshAccessToken: false
     });
-  }),
+  },
 
   /**
    * Retrieves a CI SAML Bearer Token
@@ -448,7 +469,8 @@ const CredentialsBase = SparkPlugin.extend({
    * @return {Promise} Resolves with an Object containing a `BearerToken` and an
    * `AccountExpires`
    */
-  _getSamlBearerToken: oneFlight(`_getSamlBearerToken`, function _getSamlBearerToken() {
+   @oneFlight
+  _getSamlBearerToken() {
     this.logger.info(`credentials: requesting SAML Bearer Token`);
 
     if (!this.orgId) {
@@ -470,9 +492,9 @@ const CredentialsBase = SparkPlugin.extend({
       shouldRefreshAccessToken: false
     })
       .then(resolveWithResponseBody);
-  }),
+  },
 
-  _handleRefreshFailure: function _handleRefreshFailure(res) {
+  _handleRefreshFailure(res) {
     if (res.error && res.error === 'invalid_request') {
       this.logger.warn('token refresh failed: ', res.errorDescription);
       this.unset('authorization');
@@ -481,13 +503,13 @@ const CredentialsBase = SparkPlugin.extend({
     return Promise.reject(res);
   },
 
-  _pushClientCredentialsAuthorization: function _pushClientCredentialsAuthorization(authorization) {
+  _pushClientCredentialsAuthorization(authorization) {
     this.logger.info('credentials: received client credentials');
 
     this.clientAuthorization = authorization;
   },
 
-  _pushAuthorization: function _pushAuthorization(authorization) {
+  _pushAuthorization(authorization) {
     this.logger.info('credentials: received authorization');
 
     const previousAuthorization = this.previousAuthorization;
@@ -498,7 +520,6 @@ const CredentialsBase = SparkPlugin.extend({
       previousAuthorization.revoke();
     }
   }
-
 });
 
 export default CredentialsBase;

@@ -14,6 +14,7 @@ import url from 'url';
 import uuid from 'uuid';
 import Authorization from './authorization';
 import CredentialsBase from './credentials-base';
+import {persist, waitForValue} from '../../lib/storage';
 
 /**
  * @private
@@ -22,7 +23,9 @@ import CredentialsBase from './credentials-base';
 function noop() {/* eslint no-empty:[0] */}
 
 const Credentials = CredentialsBase.extend({
-  authorize: oneFlight(`authorize`, function authorize(options) {
+  @oneFlight
+  @waitForValue(`authorization`)
+  authorize(options) {
     /* eslint complexity: [0] */
     /* eslint camelcase: [0] */
     /* eslint no-invalid-this: [0] */
@@ -53,7 +56,7 @@ const Credentials = CredentialsBase.extend({
     default:
       return Promise.reject(new Error(`config.credentials.clientType must be defined`));
     }
-  }),
+  },
 
   initiateImplicitGrant(options) {
     const vars = {
@@ -99,6 +102,8 @@ const Credentials = CredentialsBase.extend({
     return new Promise(noop);
   },
 
+  @persist(`authorization`)
+  @persist(`clientAuthorization`)
   initialize() {
     // AmpersandState is a little weird about initialization order. Code that
     // depends on this.config needs to run after SparkCore#initialize executes,

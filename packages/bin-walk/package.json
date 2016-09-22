@@ -1,6 +1,6 @@
 {
   "name": "@ciscospark/bin-walk",
-  "version": "0.7.0-alpha.10dc6ffb",
+  "version": "0.7.0-alpha",
   "description": "",
   "main": "./src",
   "bin": {
@@ -20,8 +20,8 @@
     "lodash": "^4.5.1"
   },
   "devDependencies": {
-    "babel-eslint": "^6.0.0-beta.5",
-    "eslint": "2.2.0",
-    "eslint-plugin-mocha-only": "0.0.3"
+    "babel-eslint": "^6.1.2",
+    "eslint": "^3.5.0",
+    "eslint-plugin-mocha": "^4.5.1"
   }
 }

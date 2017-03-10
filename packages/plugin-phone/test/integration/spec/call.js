@@ -192,7 +192,6 @@ describe(`plugin-phone`, function() {
     });
 
     describe(`#direction`, () => {
-      // TODO should we use webrtc directions?
       it(`indicates the initiating and receiving members of the call`, () => {
         const call = spock.spark.phone.dial(mccoy.email);
         assert.equal(call.direction, `out`);
@@ -249,133 +248,9 @@ describe(`plugin-phone`, function() {
       });
     });
 
-    describe(`#remoteMediaStreamUrl`, () => {
-      let call;
-
-      describe(`when the remoteMediaStream gets set`, () => {
-        afterEach(() => {
-          const c = call;
-          call = undefined;
-          return c.hangup().catch((reason) => console.warn(reason));
-        });
-
-        it(`gets created`, () => {
-          call = spock.spark.phone.dial(mccoy.email);
-          assert.isUndefined(call.remoteMediaStream);
-          return handleErrorEvent(call, () => Promise.all([
-            mccoy.spark.phone.when(`call:incoming`)
-              .then(([c]) => c.answer()),
-            call.when(`connected`)
-              .then(() => {
-                return assert.isDefined(call.remoteMediaStreamUrl);
-              })
-          ]));
-        });
-      });
-
-      describe(`when the remoteMediaStream gets changed`, () => {
-        it(`gets revoked and replaced`);
-      });
-
-      describe(`when the remoteMediaStream gets removed`, () => {
-        it(`gets revoked`);
-      });
-
-      describe(`when the call ends`, () => {
-        it(`gets revoked`, () => {
-          let remoteMediaStreamUrl;
-          let revokeSpy;
-          call = spock.spark.phone.dial(mccoy.email);
-          assert.isUndefined(call.remoteMediaStreamUrl);
-          return handleErrorEvent(call, () => Promise.all([
-            mccoy.spark.phone.when(`call:incoming`)
-              .then(([c]) => {
-                return c.answer();
-              }),
-            call.when(`connected`)
-              .then(() => {
-                remoteMediaStreamUrl = call.remoteMediaStreamUrl;
-                return assert.isDefined(remoteMediaStreamUrl);
-              })
-              .then(() => {
-                revokeSpy = sinon.spy(URL, `revokeObjectURL`);
-                return setTimeout(() => call.hangup(), 1500);
-              }),
-            call.when(`disconnected`)
-              .then(() => assert.calledWith(revokeSpy, remoteMediaStreamUrl))
-              .then(() => assert.isUndefined(call.remoteMediaStreamUrl))
-              .then(() => URL.revokeObjectURL.restore())
-          ]));
-        });
-      });
-    });
-
     describe(`#localMediaStream`, () => {
       describe(`when it is replaced mid-call`, () => {
         it(`triggers a renegotiation`);
-      });
-    });
-
-    describe(`#localMediaStreamUrl`, () => {
-      let call;
-
-      describe(`when the localMediaStream gets set`, () => {
-        it(`gets created`, () => {
-          call = spock.spark.phone.dial(mccoy.email);
-          assert.isUndefined(call.localMediaStreamUrl);
-          return handleErrorEvent(call, () => Promise.all([
-            mccoy.spark.phone.when(`call:incoming`)
-              .then(([c]) => c.answer()),
-            new Promise((resolve, reject) => {
-              call.on(`connected`, () => {
-                try {
-                  assert.instanceOf(call.localMediaStream, MediaStream);
-                  assert.isDefined(call.localMediaStreamUrl);
-                  resolve();
-                }
-                catch (err) {
-                  reject(err);
-                }
-              });
-            })
-          ]));
-        });
-      });
-
-      describe(`when the localMediaStream gets changed`, () => {
-        it(`gets revoked and replaced`);
-      });
-
-      describe(`when the localMediaStream gets removed`, () => {
-        it(`gets revoked`);
-      });
-
-      describe(`when the call ends`, () => {
-        it(`gets revoked`, () => {
-          let localMediaStreamUrl;
-          let revokeSpy;
-          const call = spock.spark.phone.dial(mccoy.email);
-          assert.isUndefined(call.localMediaStreamUrl);
-          return handleErrorEvent(call, () => Promise.all([
-            mccoy.spark.phone.when(`call:incoming`)
-              .then(([c]) => {
-                return c.answer();
-              }),
-            call.when(`connected`)
-              .then(() => {
-                localMediaStreamUrl = call.localMediaStreamUrl;
-                return assert.isDefined(localMediaStreamUrl);
-              })
-              .then(() => {
-                revokeSpy = sinon.spy(URL, `revokeObjectURL`);
-                return call.hangup();
-              }),
-            call.when(`disconnected`)
-              .then(() => assert.calledWith(revokeSpy, localMediaStreamUrl))
-              .then(() => assert.isUndefined(call.localMediaStreamUrl))
-              .then(() => URL.revokeObjectURL.restore())
-          ]));
-        });
       });
     });
 
@@ -686,122 +561,9 @@ describe(`plugin-phone`, function() {
           });
         });
       });
-
-      describe.skip(`in-progress events`, () => {
-        let call;
-        beforeEach(() => {
-          call = spock.spark.phone.dial(mccoy.email);
-          assert.equal(call.status, `initiated`);
-        });
-
-        describe(`on(remoteAudioMuted:change)`, () => {
-          // TODO: When the remote party calls stopSendingAudio,
-          // it doesn't trigger this change, but it should
-          it(`gets triggered when the remote party mutes their audio`, () => {
-            let remoteCall;
-            let remoteAudioSpy;
-            return handleErrorEvent(call, () => Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => {
-                  remoteCall = c;
-                  remoteCall.acknowledge();
-                  remoteCall.answer({constraints: {audio: true}});
-                }),
-              call.when(`connected`)
-                .then(() => remoteCall.stopSendingAudio())
-                .then(() => {
-                  const triggerSpy = sinon.spy(call, `trigger`);
-                  remoteAudioSpy = triggerSpy.withArgs(`remoteAudioMuted:change`);
-                })
-                .then(() => remoteCall.stopSendingAudio())
-                .then(() => remoteCall.hangup()),
-              call.when(`disconnected`)
-                .then(() => {
-                  return assert.callCount(remoteAudioSpy, 1);
-                })
-            ]));
-          });
-
-          it(`gets triggered when the remote party unmutes their audio`, () => {
-            let remoteCall;
-            let remoteAudioSpy;
-            return handleErrorEvent(call, () => Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => {
-                  remoteCall = c;
-                  remoteCall.acknowledge();
-                  remoteCall.answer({constraints: {audio: false}});
-                }),
-              call.when(`connected`)
-                .then(() => {
-                  const triggerSpy = sinon.spy(call, `trigger`);
-                  remoteAudioSpy = triggerSpy.withArgs(`remoteAudioMuted:change`);
-                })
-                .then(() => remoteCall.startSendingAudio())
-                .then(() => remoteCall.hangup()),
-              call.when(`disconnected`)
-                .then(() => {
-                  return assert.callCount(remoteAudioSpy, 1);
-                })
-            ]));
-          });
-        });
-
-        describe(`on(remoteVideoMuted:change)`, () => {
-          // TODO: When the remote party calls stopSendingAudio,
-          // it doesn't trigger this change, but it should
-          it(`gets triggered when the remote party mutes their video`, () => {
-            let remoteCall;
-            let remoteVideoSpy;
-            return handleErrorEvent(call, () => Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => {
-                  remoteCall = c;
-                  remoteCall.acknowledge();
-                  remoteCall.answer({constraints: {video: true}});
-                }),
-              call.when(`connected`)
-                .then(() => {
-                  const triggerSpy = sinon.spy(call, `trigger`);
-                  remoteVideoSpy = triggerSpy.withArgs(`remoteVideoMuted:change`);
-                })
-                .then(() => remoteCall.stopSendingVideo())
-                .then(() => remoteCall.hangup()),
-              call.when(`disconnected`)
-                .then(() => {
-                  return assert.callCount(remoteVideoSpy, 1);
-                })
-            ]));
-          });
-
-          it(`gets triggered when the remote party unmutes their video`, () => {
-            let remoteCall;
-            let remoteVideoSpy;
-            return handleErrorEvent(call, () => Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => {
-                  remoteCall = c;
-                  remoteCall.acknowledge();
-                  remoteCall.answer({constraints: {video: false}});
-                }),
-              call.when(`connected`)
-                .then(() => {
-                  const triggerSpy = sinon.spy(call, `trigger`);
-                  remoteVideoSpy = triggerSpy.withArgs(`remoteVideoMuted:change`);
-                })
-                .then(() => remoteCall.startSendingVideo())
-                .then(() => remoteCall.hangup()),
-              call.when(`disconnected`)
-                .then(() => {
-                  return assert.callCount(remoteVideoSpy, 1);
-                })
-            ]));
-          });
-        });
-      });
     });
 
-    describe.skip(`on(error)`, () => {
+    describe(`on(error)`, () => {
       it(`gets triggered when something fails in a non-promise-returning method`, () => {
         this.timeout(30000);
         const call = spock.spark.phone.dial(`no one`);
@@ -812,18 +574,5 @@ describe(`plugin-phone`, function() {
           .then(() => assert.called(errorSpy));
       });
     });
-
-    describe(`on(localMediaStream:change)`, () => {
-      // Note: we want to wait for the url update so we don't try to access the
-      // url before it has been replaced
-      it(`gets triggered when the localMediaStreamUrl is updated`);
-    });
-
-    describe(`on(remoteMediaStream:change)`, () => {
-      // Note: we want to wait for the url update so we don't try to access the
-      // url before it has been replaced
-      it(`gets triggered when the remoteMediaStreamUrl is updated`);
-    });
-
   });
 });

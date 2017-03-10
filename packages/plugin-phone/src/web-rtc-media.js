@@ -89,11 +89,14 @@ function getLocalMediaStatus(kind, pc) {
 
 const WebRTCMedia = AmpState.extend({
   props: {
+    // TODO audio and video need to allow full constraints objects, not just
+    // booleans
     audio: {
       default: false,
       type: `boolean`
     },
     localMediaStream: {
+      default: undefined,
       type: `object`
     },
     offerToReceiveAudio: {
@@ -116,6 +119,7 @@ const WebRTCMedia = AmpState.extend({
       type: `boolean`
     },
     remoteMediaStream: {
+      default: undefined,
       type: `object`
     },
     sendingAudio: {
@@ -202,6 +206,8 @@ const WebRTCMedia = AmpState.extend({
     if (this.peer) {
       end(this.peer);
     }
+    this.unset(`localMediaStream`);
+    this.unset(`remoteMediaStream`);
   },
 
   initialize(...args) {

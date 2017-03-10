@@ -352,6 +352,7 @@ const Call = SparkPlugin.extend({
           sdp: offer,
           mediaId: this.mediaId
         }))
+        // TODO move _fetchExpectedLocus to plugin-locus
         .then(() => this._fetchExpectedLocus())
         .then((locus) => {
           this._setLocus(locus);
@@ -365,7 +366,12 @@ const Call = SparkPlugin.extend({
       if (this.remoteMediaStreamUrl) {
         URL.revokeObjectURL(this.remoteMediaStreamUrl);
       }
-      this.remoteMediaStreamUrl = URL.createObjectURL(this.remoteMediaStream);
+      if (this.remoteMediaStream) {
+        this.remoteMediaStreamUrl = URL.createObjectURL(this.remoteMediaStream);
+      }
+      else {
+        this.unset(`remoteMediaStreamUrl`);
+      }
     });
 
     // Reminder: this is not a derived property so that we can reassign the
@@ -375,7 +381,12 @@ const Call = SparkPlugin.extend({
       if (this.localMediaStreamUrl) {
         URL.revokeObjectURL(this.localMediaStreamUrl);
       }
-      this.localMediaStreamUrl = URL.createObjectURL(this.localMediaStream);
+      if (this.localMediaStream) {
+        this.localMediaStreamUrl = URL.createObjectURL(this.localMediaStream);
+      }
+      else {
+        this.unset(`localMediaStreamUrl`);
+      }
     });
 
     this.on(`change:localMediaStream`, () => {
@@ -384,25 +395,15 @@ const Call = SparkPlugin.extend({
       }
     });
 
-    this.on(`change:remoteMediaStreamUrl`, () => {
-      this.trigger(`remoteMediaStream:change`);
-    });
-
-
-    this.on(`change:localMediaStreamUrl`, () => {
-      this.trigger(`localMediaStream:change`);
-    });
-
-    this.on(`change:localMediaStreamUrl`, () => {
-      this.trigger(`localMediaStream:change`);
-    });
-
-    this.on(`change:remoteAudioMuted`, () => {
-      this.trigger(`remoteAudioMuted:change`);
-    });
-
-    this.on(`change:remoteVideoMuted`, () => {
-      this.trigger(`remoteVideoMuted:change`);
+    [
+      `remoteMediaStream`,
+      `remoteMediaStreamUrl`,
+      `localMediaStream`,
+      `localMediaStreamUrl`,
+      `remoteAudioMuted`,
+      `remoteVideoMuted`
+    ].forEach((key) => {
+      this.on(`change:${key}`, () => this.trigger(`${key}:change`));
     });
 
     this.on(`change:isActive`, () => {

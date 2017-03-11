@@ -6,22 +6,22 @@
 import '../..';
 
 import {assert} from '@ciscospark/test-helper-chai';
+import {maxWaitForEvent} from '@ciscospark/test-helper-mocha';
 import sinon from '@ciscospark/test-helper-sinon';
 import CiscoSpark from '@ciscospark/spark-core';
 import testUsers from '@ciscospark/test-helper-test-users';
-import transform from 'sdp-transform';
-import {find} from 'lodash';
+import handleErrorEvent from '../lib/handle-error-event';
 
 if (process.env.NODE_ENV !== `test`) {
   throw new Error(`Cannot run the plugin-phone test suite without NODE_ENV === "test"`);
 }
 
 describe(`plugin-phone`, function() {
-  this.timeout(60000);
+  this.timeout(30000);
 
   describe(`Phone`, () => {
     let mccoy, spock;
-    before(() => testUsers.create({count: 2})
+    before(`create users and register`, () => testUsers.create({count: 2})
       .then((users) => {
         [mccoy, spock] = users;
         spock.spark = new CiscoSpark({
@@ -35,7 +35,6 @@ describe(`plugin-phone`, function() {
             authorization: mccoy.token
           }
         });
-
         return Promise.all([
           spock.spark.phone.register(),
           mccoy.spark.phone.register()
@@ -48,7 +47,7 @@ describe(`plugin-phone`, function() {
       mccoy.spark.phone.on(`call:incoming`, ringMccoy);
     });
 
-    after(() => Promise.all([
+    after(`unregister spock and mccoy`, () => Promise.all([
       spock && spock.spark.phone.deregister()
         .catch((reason) => console.warn(`could not disconnect spock from mercury`, reason)),
       mccoy && mccoy.spark.phone.deregister()
@@ -65,54 +64,77 @@ describe(`plugin-phone`, function() {
     });
 
     describe(`#deregister()`, () => {
-      it(`disconnects from mercury`);
-      it(`unregisters from wdm`);
-      it(`is a noop when not registered`);
+      let mercuryDisconnectSpy;
+      beforeEach(() => {
+        mercuryDisconnectSpy = sinon.spy(spock.spark.mercury, `disconnect`);
+      });
+
+      afterEach(() => mercuryDisconnectSpy.restore());
+
+      it(`disconnects from mercury`, () => {
+        return spock.spark.phone.deregister()
+          .then(() => assert.calledOnce(mercuryDisconnectSpy))
+          .then(() => assert.isFalse(spock.spark.mercury.connected, `Mercury is not connected`))
+          .then(() => assert.isFalse(spock.spark.phone.connected, `Mercury (proxied through spark.phone) is not connected`))
+          .then(() => mercuryDisconnectSpy.restore());
+      });
+
+      it(`unregisters from wdm`, () => assert.isFulfilled(spock.spark.phone.deregister()
+        .then(() => assert.isUndefined(spock.spark.device.url))
+        .then(() => spock.spark.phone.register())));
+
+      it(`is a noop when not registered`, () => assert.isFulfilled(spock.spark.phone.deregister()
+        .then(() => spock.spark.phone.deregister())
+        .then(() => spock.spark.phone.register())));
     });
 
     describe(`#dial()`, () => {
-      let createLocusSpy;
-
-      beforeEach(() => {createLocusSpy = sinon.spy(spock.spark.locus, `create`);});
-      afterEach(() => createLocusSpy.restore());
-
-      // FIXME firefox is weird with vp8 vs h264
-      it.skip(`initiates a video only call`, () => {
-        spock.spark.phone.dial(mccoy.email, {
+      it(`initiates a video-only call`, () => {
+        const call = spock.spark.phone.dial(mccoy.email, {
           constraints: {
             video: true,
             audio: false
           }
         });
 
-        return mccoy.spark.phone.when(`call:incoming`)
+        return handleErrorEvent(call, () => Promise.all([
+          mccoy.spark.phone.when(`call:incoming`)
+          // FIXME This next line shouldn't need to be in a then block, but I
+          // can't get it to work otherwise
+            .then(() => maxWaitForEvent(10000, `connected`, call))
+        ])
           .then(() => {
-            // TODO do this without spying on locus to make changing to roap
-            // easier
-            const sdp = transform.parse(createLocusSpy.args[0][1].localSdp);
-            assert.notOk(find(sdp.media, {type: `audio`}));
-            assert.equal(find(sdp.media, {type: `video`}).direction, `sendrecv`);
-          });
+            assert.isFalse(call.sendingAudio);
+            assert.isTrue(call.sendingVideo);
+            assert.isFalse(call.receivingAudio);
+            assert.isTrue(call.receivingVideo);
+          }));
       });
 
-      it(`initiates an audio only call`, () => {
-        spock.spark.phone.dial(mccoy.email, {
+      it(`initiates an audio-only call`, () => {
+        const call = spock.spark.phone.dial(mccoy.email, {
           constraints: {
             video: false,
             audio: true
           }
         });
 
-        return mccoy.spark.phone.when(`call:incoming`)
+        return handleErrorEvent(call, () => Promise.all([
+          mccoy.spark.phone.when(`call:incoming`)
+          // FIXME This next line shouldn't need to be in a then block, but I
+          // can't get it to work otherwise
+            .then(() => maxWaitForEvent(10000, `connected`, call))
+        ])
           .then(() => {
-            const sdp = transform.parse(createLocusSpy.args[0][1].localSdp);
-            assert.notOk(find(sdp.media, {type: `video`}));
-            assert.equal(find(sdp.media, {type: `audio`}).direction, `sendrecv`);
-          });
+            assert.isTrue(call.sendingAudio);
+            assert.isFalse(call.sendingVideo);
+            assert.isTrue(call.receivingAudio);
+            assert.isFalse(call.receivingVideo);
+          }));
       });
 
       it(`initiates a receive-only call`, () => {
-        spock.spark.phone.dial(mccoy.email, {
+        const call = spock.spark.phone.dial(mccoy.email, {
           constraints: {
             video: false,
             audio: false
@@ -123,23 +145,73 @@ describe(`plugin-phone`, function() {
           }
         });
 
-        return mccoy.spark.phone.when(`call:incoming`)
+        return handleErrorEvent(call, () => Promise.all([
+          mccoy.spark.phone.when(`call:incoming`)
+          // FIXME This next line shouldn't need to be in a then block, but I
+          // can't get it to work otherwise
+            .then(() => maxWaitForEvent(10000, `connected`, call))
+        ])
           .then(() => {
-            const sdp = transform.parse(createLocusSpy.args[0][1].localSdp);
-            assert.equal(find(sdp.media, {type: `audio`}).direction, `recvonly`);
-            assert.equal(find(sdp.media, {type: `video`}).direction, `recvonly`);
-          });
+            assert.isFalse(call.sendingAudio);
+            assert.isFalse(call.sendingVideo);
+            assert.isTrue(call.receivingAudio);
+            assert.isTrue(call.receivingVideo);
+          }));
       });
 
       it(`calls a user by email address`, () => {
-        spock.spark.phone.dial(mccoy.email);
-        return mccoy.spark.phone.when(`call:incoming`)
-          .then(() => assert.calledOnce(ringMccoy));
+        const call = spock.spark.phone.dial(mccoy.email);
+        return handleErrorEvent(call, () => {
+          return mccoy.spark.phone.when(`call:incoming`)
+            .then(() => assert.calledOnce(ringMccoy));
+        });
       });
 
       it(`calls a user by AppID username`);
-      it(`calls a user by tropo uri`);
-      it(`calls a user by spark uri`);
+
+      // TODO currently timing out because the PSTN participant is showing up as
+      // inactive
+      it.skip(`calls a PSTN phone number`, () => {
+        const call = spock.spark.phone.dial(`3175276955`);
+        return handleErrorEvent(call, () => call.when(`connected`)
+          .then(() => call.hangup()));
+      });
+
+      // Not implementing this feature at this time: doing so would introduce a
+      // dependency on an internal microservice (convo).
+      it.skip(`calls a user by hydra room id`, () => spock.spark.request({
+        method: `POST`,
+        service: `hydra`,
+        resource: `messages`,
+        body: {
+          toPersonEmail: mccoy.email,
+          text: `test message`
+        }
+      })
+        .then((res) => {
+          const call = spock.spark.phone.dial(res.body.roomId);
+          return handleErrorEvent(call, () => mccoy.spark.phone.when(`call:incoming`));
+        })
+        .then(() => assert.calledOnce(ringMccoy)));
+
+      // Not implementing this feature at this time: doing so would introduce a
+      // dependency on an internal microservice (convo).
+      it(`calls a user by room url`);
+
+      it(`calls a user by hydra user id`, () => mccoy.spark.request({
+        method: `GET`,
+        service: `hydra`,
+        resource: `people/me`
+      })
+        .then((res) => handleErrorEvent(spock.spark.phone.dial(res.body.id),
+          (call) => mccoy.spark.phone.when(`call:incoming`)
+            .then(() => call.hangup()))));
+
+      it(`calls a user by uuid`, () => handleErrorEvent(spock.spark.phone.dial(mccoy.id),
+          (call) => mccoy.spark.phone.when(`call:incoming`)
+            .then(() => call.hangup())));
+
+      // TODO const call = spock.spark.phone.dial(`sip:...`);
       it(`calls a user by sip uri`);
 
       it(`places a call with an existing MediaStreamObject`, () => {
@@ -164,7 +236,7 @@ describe(`plugin-phone`, function() {
           });
         }));
 
-      afterEach(() => kirk && kirk.spark.phone.deregister());
+      afterEach(`unregister kirk`, () => kirk && kirk.spark.phone.deregister());
 
       it(`registers with wdm`, () => {
         return kirk.spark.phone.register()
@@ -183,7 +255,7 @@ describe(`plugin-phone`, function() {
       });
 
       let call;
-      afterEach(() => Promise.resolve(call && call.hangup()
+      afterEach(`end current call`, () => Promise.resolve(call && call.hangup()
         .catch((reason) => console.warn(`failed to end call`, reason))
         .then(() => {call = undefined;})));
 
@@ -192,21 +264,20 @@ describe(`plugin-phone`, function() {
         call = spock.spark.phone.dial(kirk.email);
         // use change:locus as the trigger for determining when the post to
         // /call completes.
-        return call.when(`change:locus`)
+        return handleErrorEvent(call, () => call.when(`change:locus`)
           .then(() => {
             assert.isFalse(kirk.spark.phone.registered);
             kirk.spark.phone.register();
             return kirk.spark.phone.when(`call:incoming`)
               .then(() => assert.isTrue(kirk.spark.phone.registered, `By the time spark.phone can emit call:incoming, spark.phone.registered must be true`));
-          });
+          }));
       });
 
       it(`is a noop when already registered`, () => assert.isFulfilled(spock.spark.phone.register()));
     });
 
-    // FIXME firefox is weird with vp8 vs h264
-    describe.skip(`#defaultFacingMode`, () => {
-      it(`defaults to user`, () => {
+    describe(`#defaultFacingMode`, () => {
+      it.skip(`defaults to user`, () => {
         assert.equal(spock.spark.phone.defaultFacingMode, `user`);
       });
 

@@ -27,3 +27,5 @@ string
 .npm
 local/
 docker-env
+browsers.processed.js
+tasks/selenium

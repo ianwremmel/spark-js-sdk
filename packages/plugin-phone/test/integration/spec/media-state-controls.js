@@ -6,33 +6,15 @@
 import '../..';
 
 import {assert} from '@ciscospark/test-helper-chai';
+import sinon from '@ciscospark/test-helper-sinon';
 import CiscoSpark from '@ciscospark/spark-core';
-import transform from 'sdp-transform';
-import {find} from 'lodash';
 import testUsers from '@ciscospark/test-helper-test-users';
+import handleErrorEvent from '../lib/handle-error-event';
+import {skipInFirefox} from '@ciscospark/test-helper-mocha';
 
+import {boolToStatus} from '../..';
 
-function boolToStatus(sending, receiving) {
-  if (sending && receiving) {
-    return `sendrecv`;
-  }
-
-  if (sending && !receiving) {
-    return `sendonly`;
-  }
-
-  if (!sending && receiving) {
-    return `recvonly`;
-  }
-
-  if (!sending && !receiving) {
-    return `inactive`;
-  }
-
-  throw new Error(`If you see this error, your JavaScript engine has a major flaw`);
-}
-
-function assertMedia(call, {
+function assertLocusMediaState(call, {
   sendingAudio,
   sendingVideo,
   receivingAudio,
@@ -43,186 +25,124 @@ function assertMedia(call, {
   assert.equal(call.sendingVideo, sendingVideo, `The call ${sendingVideo ? `is` : `is not`} sending video`);
 
   // Locus State
-  // FIXME reenable locus state tests once Locus team fixes cloud-apps #3939
-  // assert.equal(call.local.status.audioStatus.toLowerCase(), boolToStatus(sendingAudio, receivingAudio), `Locus State`);
-  // assert.equal(call.local.status.videoStatus.toLowerCase(), boolToStatus(sendingVideo, receivingVideo), `Locus State`);
-  //
-  // assert.equal(call.remote.status.audioStatus.toLowerCase(), boolToStatus(remoteSendingAudio, remoteReceivingAudio), `Locus State`);
-  // assert.equal(call.remote.status.videoStatus.toLowerCase(), boolToStatus(remoteSendingVideo, remoteReceivingVideo), `Locus State`);
+  assert.equal(call.local.status.audioStatus.toLowerCase(), boolToStatus(sendingAudio, receivingAudio), `Locus State`);
+  assert.equal(call.local.status.videoStatus.toLowerCase(), boolToStatus(sendingVideo, receivingVideo), `Locus State`);
 
   // Media State
-  const offer = transform.parse(call.pc.localDescription.sdp);
-  assertPeerConnectionState(offer, `audio`, sendingAudio, receivingAudio);
-  assertPeerConnectionState(offer, `video`, sendingVideo, receivingVideo);
-
-  const answer = transform.parse(call.pc.remoteDescription.sdp);
-  assertPeerConnectionState(answer, `audio`, receivingAudio, sendingAudio);
-  assertPeerConnectionState(answer, `video`, receivingVideo, sendingVideo);
-}
-
-function assertPeerConnectionState(sdp, type, sending, receiving) {
-  const media = find(sdp.media, {type});
-  if (!sending && !receiving) {
-    if (media) {
-      assert.equal(media.direction, `inactive`);
-    }
-    return;
-  }
-
-  assert.equal(media.direction, boolToStatus(sending, receiving));
+  assert.equal(call.media.sendingAudio, sendingAudio, `The call's media layer's sendingAudio is ${sendingAudio}`);
+  assert.equal(call.media.sendingVideo, sendingVideo, `The call's media layer's sendingVideo is ${sendingVideo}`);
+  assert.equal(call.media.receivingAudio, receivingAudio, `The call's media layer's receivingAudio is ${receivingAudio}`);
+  assert.equal(call.media.receivingVideo, receivingVideo, `The call's media layer's receivingVideo is ${receivingVideo}`);
 }
 
 describe(`plugin-phone`, function() {
-  this.timeout(60000);
+  this.timeout(30000);
 
   describe(`Call`, () => {
     describe(`Media State Controls`, () => {
       /* eslint max-statements: [0] */
       let mccoy, spock;
-      before(() => testUsers.create({count: 2})
-        .then((users) => {
-          [mccoy, spock] = users;
+      // I was getting weird cross talk from sharing the same users across all
+      // the tests. I think it was a latency issue on the locus or linus side
+      // where not all the cloud pieces were fully aware the previous test's
+      // call had ended. As such, it seems necessary to use new users for each
+      // test.
+      beforeEach(`create caller`, () => testUsers.create({count: 1})
+        .then(([user]) => {
+          spock = user;
           spock.spark = new CiscoSpark({
             credentials: {
               authorization: spock.token
             }
           });
 
+          return spock.spark.phone.register();
+        }));
+
+      beforeEach(`create callee`, () => testUsers.create({count: 1})
+        .then(([user]) => {
+          mccoy = user;
           mccoy.spark = new CiscoSpark({
             credentials: {
               authorization: mccoy.token
             }
           });
 
-          return Promise.all([
-            spock.spark.phone.register(),
-            mccoy.spark.phone.register()
-          ]);
+          return mccoy.spark.phone.register();
         }));
 
-      after(() => Promise.all([
-        spock && spock.spark.phone.deregister()
-          .catch((reason) => console.warn(`could not disconnect spock from mercury`, reason)),
-        mccoy && mccoy.spark.phone.deregister()
-          .catch((reason) => console.warn(`could not disconnect mccoy from mercury`, reason))
-      ]));
+      afterEach(() => mccoy && mccoy.spark.phone.deregister()
+        .catch((reason) => console.warn(`could not disconnect mccoy from mercury`, reason)));
+
+      afterEach(() => spock && spock.spark.phone.deregister()
+        .catch((reason) => console.warn(`could not disconnect spock from mercury`, reason)));
 
       describe(`#toggleReceivingAudio()`, () => {
-        describe(`when the call is receiving audio`, () => {
-          // FIXME disabled due to firefox bug (it works, but renegotiation does
-          // not) See https://bugzilla.mozilla.org/show_bug.cgi?id=1285009
-          it.skip(`stops receiving audio`, () => {
+        describe(`when the call is started with audio`, () => {
+          // TODO [SSDK-544] Work with the Locus and Calliope teams to make
+          // SENDONLY audio a valid thing
+          it.skip(`stops receiving audio and starts receiving audio`, () => {
             const call = spock.spark.phone.dial(mccoy.email);
-
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => handleErrorEvent(c, () => c.answer())),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
                 .then(() => call.toggleReceivingAudio())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: false,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
+                }))
+                .then(() => call.toggleReceivingAudio()))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: true,
+                  receivingAudio: true,
+                  receivingVideo: true
                 }))
             ]);
           });
         });
 
-        describe(`when the call is not receiving audio`, () => {
-          // FIXME disabled due to firefox bug (it works, but renegotiation does
-          // not) See https://bugzilla.mozilla.org/show_bug.cgi?id=1285009
-          it.skip(`starts receiving audio`, () => {
-            const call = spock.spark.phone.dial(mccoy.email);
-
-            return Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleReceivingAudio())
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: false,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleReceivingAudio())
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-            ]);
-          });
-        });
-
-        describe(`when the call was started without audio`, () => {
-          // FIXME firefox is weird with vp8 vs h264
-          it.skip(`starts receiving audio`, () => {
+        describe(`when the call is started without audio`, () => {
+          // TODO [SSDK-544] Work with the Locus and Calliope teams to make
+          // SENDONLY audio a valid thing
+          it.skip(`starts receiving audio and stops receiving audio`, () => {
             const call = spock.spark.phone.dial(mccoy.email, {
               constraints: {
-                audio: false
+                video: false
               }
             });
-
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
-                  sendingAudio: false,
-                  sendingVideo: true,
-                  receivingAudio: false,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => assert.isFalse(call.sendingAudio, `The call is not sending audio`))
-                .then(() => call.toggleReceivingAudio())
-                .then(() => assertMedia(call, {
-                  sendingAudio: false,
-                  sendingVideo: true,
+                .then(([c]) => handleErrorEvent(c, () => c.answer())),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: false,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: false
+                }))
+                .then(() => call.toggleReceivingAudio())
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: false,
+                  receivingAudio: false,
+                  receivingVideo: false
+                }))
+                .then(() => call.toggleReceivingAudio()))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: false,
+                  receivingAudio: true,
+                  receivingVideo: false
                 }))
             ]);
           });
@@ -230,121 +150,69 @@ describe(`plugin-phone`, function() {
       });
 
       describe(`#toggleReceivingVideo()`, () => {
-        describe(`when the call is receiving video`, () => {
-          // FIXME disabled due to firefox bug (it works, but renegotiation does
-          // not) See https://bugzilla.mozilla.org/show_bug.cgi?id=1285009
-          it.skip(`stops receiving video`, () => {
+        describe(`when the call is started with video`, () => {
+          // See comment in web-rtc-media unit tests regarding firefox
+          skipInFirefox(it)(`stops receiving video and starts receiving video`, () => {
             const call = spock.spark.phone.dial(mccoy.email);
-
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => handleErrorEvent(c, () => c.answer())),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
                 .then(() => call.toggleReceivingVideo())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: false,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: false
+                }))
+                .then(() => call.toggleReceivingVideo()))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: true,
+                  receivingAudio: true,
+                  receivingVideo: true
                 }))
             ]);
           });
         });
 
-        describe(`when the call is not receiving video`, () => {
-          // FIXME disabled due to firefox bug (it works, but renegotiation does
-          // not) See https://bugzilla.mozilla.org/show_bug.cgi?id=1285009
-          it.skip(`starts receiving video`, () => {
-            const call = spock.spark.phone.dial(mccoy.email);
-
-            return Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleReceivingVideo())
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: false,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleReceivingVideo())
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-            ]);
-          });
-        });
-
-        describe(`when the call was started without video`, () => {
-          // FIXME firefox is weird with vp8 vs h264
-          it.skip(`starts receiving video`, () => {
+        describe(`when the call is started without video`, () => {
+          // See comment in web-rtc-media unit tests regarding firefox
+          skipInFirefox(it)(`starts receiving video and stops receiving video`, () => {
             const call = spock.spark.phone.dial(mccoy.email, {
               constraints: {
                 video: false
               }
             });
-
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => handleErrorEvent(c, () => c.answer())),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: false,
                   receivingAudio: true,
-                  receivingVideo: false,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: false
                 }))
-                .then(() => assert.isFalse(call.sendingVideo, `The call is not sending video`))
                 .then(() => call.toggleReceivingVideo())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: false,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
+                }))
+                .then(() => call.toggleReceivingVideo()))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: false,
+                  receivingAudio: true,
+                  receivingVideo: false
                 }))
             ]);
           });
@@ -352,238 +220,255 @@ describe(`plugin-phone`, function() {
       });
 
       describe(`#toggleSendingAudio()`, () => {
-        describe(`when the call is sending audio`, () => {
-          it(`stops sending audio`, () => {
+        describe(`when the call is started with audio`, () => {
+          it(`stops sending audio then starts sending audio`, () => {
             const call = spock.spark.phone.dial(mccoy.email);
-
+            let mccoyCall;
+            const spy = sinon.spy();
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => {
+                  mccoyCall = c;
+                  mccoyCall.on(`remoteAudioMuted:change`, spy);
+                  return handleErrorEvent(c, () => c.answer());
+                }),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
                 .then(() => call.toggleSendingAudio())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: false,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
+                .then(() => {
+                  assert.calledOnce(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(false, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, true));
+                  return call.toggleSendingAudio();
+                }))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: true,
+                  receivingAudio: true,
+                  receivingVideo: true
+                }))
+                .then(() => {
+                  assert.calledTwice(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, true));
+                })
             ]);
           });
         });
 
-        describe(`when the call has stopped sending audio`, () => {
-          it(`starts sending audio`, () => {
-            const call = spock.spark.phone.dial(mccoy.email);
-
-            return Promise.all([
-              mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleSendingAudio())
-                .then(() => assertMedia(call, {
-                  sendingAudio: false,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleSendingAudio())
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-            ]);
-          });
-        });
-
-        describe(`when the call was started without audio`, () => {
-          // FIXME Neil and Nathan are looking into alternatives to returning
-          // `inactive` in the answer when the offer audio attempts to be
-          // `sendonly`
-          it.skip(`adds audio to the call`, () => {
+        describe(`when the call is started without audio`, () => {
+          // TODO [SSDK-566] Work with locus/linus to figure out why Calliope
+          // blows up when adding video to an audio-only call
+          it.skip(`starts sending audio and stops sending audio`, () => {
             const call = spock.spark.phone.dial(mccoy.email, {
               constraints: {
                 audio: false
               }
             });
-
+            let mccoyCall;
+            const spy = sinon.spy();
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => {
+                  mccoyCall = c;
+                  mccoyCall.on(`remoteAudioMuted:change`, spy);
+                  return handleErrorEvent(c, () => c.answer());
+                }),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: false,
                   sendingVideo: true,
                   receivingAudio: false,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
-                .then(() => assert.isFalse(call.sendingAudio, `The call is not sending audio`))
                 .then(() => call.toggleSendingAudio())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: false,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
+                .then(() => {
+                  assert.calledOnce(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, false));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, true));
+                  return call.toggleSendingAudio();
+                }))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: false,
+                  sendingVideo: true,
+                  receivingAudio: false,
+                  receivingVideo: true
+                }))
+                .then(() => {
+                  assert.calledTwice(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(false, false));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, true));
+                })
             ]);
           });
         });
       });
 
       describe(`#toggleSendingVideo()`, () => {
-        describe(`when the call is sending video`, () => {
-          // FIXME firefox is weird with vp8 vs h264
-          it.skip(`stops sending video`, () => {
+        describe(`when the call is started with video`, () => {
+          it(`stops sending video then starts sending video`, () => {
             const call = spock.spark.phone.dial(mccoy.email);
-
+            let mccoyCall;
+            const spy = sinon.spy();
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => {
+                  mccoyCall = c;
+                  mccoyCall.on(`remoteVideoMuted:change`, spy);
+                  return handleErrorEvent(c, () => c.answer());
+                }),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
                 .then(() => call.toggleSendingVideo())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: false,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
                 }))
+                .then(() => {
+                  assert.calledOnce(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(false, true));
+                  return call.toggleSendingVideo();
+                }))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: true,
+                  receivingAudio: true,
+                  receivingVideo: true
+                }))
+                .then(() => {
+                  assert.calledTwice(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, true));
+                })
             ]);
           });
         });
 
-        describe(`when the call has stopped sending video`, () => {
-          // FIXME firefox is weird with vp8 vs h264
-          it.skip(`starts sending video`, () => {
-            const call = spock.spark.phone.dial(mccoy.email);
-
+        describe(`when the call is started without video`, () => {
+          // TODO [SSDK-565] Work with locus to figure out why the remote party
+          // does not get notified when we add video to the call.
+          it.skip(`starts sending video and stops sending video`, () => {
+            const call = spock.spark.phone.dial(mccoy.email, {
+              constraints: {
+                video: false
+              }
+            });
+            let mccoyCall;
+            const spy = sinon.spy();
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
-                  sendingAudio: true,
-                  sendingVideo: true,
-                  receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
-                }))
-                .then(() => call.toggleSendingVideo())
-                .then(() => assertMedia(call, {
+                .then(([c]) => {
+                  mccoyCall = c;
+                  mccoyCall.on(`remoteVideoMuted:change`, spy);
+                  return handleErrorEvent(c, () => c.answer());
+                }),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: false,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: false
                 }))
                 .then(() => call.toggleSendingVideo())
-                .then(() => assertMedia(call, {
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: true,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: false
                 }))
+                .then(() => {
+                  assert.calledOnce(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, false));
+                  return call.toggleSendingVideo();
+                }))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: false,
+                  receivingAudio: true,
+                  receivingVideo: false
+                }))
+                .then(() => {
+                  assert.calledTwice(spy);
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(false, false));
+                })
             ]);
           });
         });
+      });
 
-        describe(`when the call was started without video`, () => {
-          // FIXME firefox is weird with vp8 vs h264
+      describe(`toggle both`, () => {
+        describe(`when the call starts as an audio only call`, () => {
+          // TODO this test doesn't pass
           it.skip(`adds video to the call`, () => {
             const call = spock.spark.phone.dial(mccoy.email, {
               constraints: {
                 video: false
               }
             });
-
+            let mccoyCall;
             return Promise.all([
               mccoy.spark.phone.when(`call:incoming`)
-                .then(([c]) => c.answer()),
-              call.when(`connected`)
-                .then(() => assertMedia(call, {
+                .then(([c]) => {
+                  mccoyCall = c;
+                  return handleErrorEvent(c, () => c.answer());
+                }),
+              handleErrorEvent(call, () => call.when(`connected`)
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: false,
                   receivingAudio: true,
-                  receivingVideo: false,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: false
                 }))
-                .then(() => call.toggleSendingVideo())
-                .then(() => assertMedia(call, {
+                .then(() => Promise.all([
+                  call.toggleSendingAudio(),
+                  call.toggleSendingVideo()
+                ]))
+                .then(() => assertLocusMediaState(call, {
                   sendingAudio: true,
                   sendingVideo: true,
                   receivingAudio: true,
-                  receivingVideo: false,
-                  remoteSendingAudio: true,
-                  remoteSendingVideo: true,
-                  remoteReceivingAudio: true,
-                  remoteReceivingVideo: true
+                  receivingVideo: true
+                }))
+                .then(() => {
+                  assert.equal(mccoyCall.remote.status.audioStatus.toLowerCase(), boolToStatus(true, true));
+                  assert.equal(mccoyCall.remote.status.videoStatus.toLowerCase(), boolToStatus(true, false));
+                  return Promise.all([
+                    call.toggleSendingAudio(),
+                    call.toggleSendingVideo()
+                  ]);
+                }))
+                .then(() => assertLocusMediaState(call, {
+                  sendingAudio: true,
+                  sendingVideo: false,
+                  receivingAudio: true,
+                  receivingVideo: false
                 }))
             ]);
           });
@@ -592,3 +477,6 @@ describe(`plugin-phone`, function() {
     });
   });
 });
+
+// TODO add assertions about locus send/receive values in addition to peer connection values
+// TODO need test for add video to audioonly call, etc

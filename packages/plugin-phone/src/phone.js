@@ -5,7 +5,6 @@
  */
 
 import {SparkPlugin} from '@ciscospark/spark-core';
-import {eventKeys} from '@ciscospark/plugin-locus';
 import {defaults} from 'lodash';
 import Call from './call';
 import {shouldRing} from './state-parsers';
@@ -70,6 +69,22 @@ const Phone = SparkPlugin.extend({
   namespace: `phone`,
 
   /**
+   * Indicates if the current browser appears to support webrtc calling. Note:
+   * at this time, there's no way to determine if the current browser supports
+   * h264 without asking for camera permissions
+   * @returns {Promise<Boolean>}
+   */
+  isCallingSupported() {
+    return new Promise((resolve) => {
+      // I'm not thrilled by this, but detectrtc breaks the global namespace in
+      // a way that screws up the browserOnly/nodeOnly test helpers.
+      // eslint-disable-next-line global-require
+      const DetectRTC = require(`detectrtc`);
+      resolve(DetectRTC.isWebRTCSupported);
+    });
+  },
+
+  /**
    * Registers the client with the Cisco Spark cloud and starts listening for
    * WebSocket events.
    *
@@ -107,7 +122,8 @@ const Phone = SparkPlugin.extend({
   deregister() {
     // TODO figure out how to hangup all calls (or possibly just disconnect all
     // streams)
-    return this.spark.mercury.disconnect();
+    return this.spark.mercury.disconnect()
+      .then(() => this.spark.device.unregister());
   },
 
   /**
@@ -146,14 +162,12 @@ const Phone = SparkPlugin.extend({
   initialize(...args) {
     Reflect.apply(SparkPlugin.prototype.initialize, this, args);
 
-    eventKeys.forEach((key) => {
-      this.listenTo(this.spark.mercury, `event:${key}`, (event) => this._onLocusEvent(event));
-    });
+    this.listenTo(this.spark.mercury, `event:locus`, (event) => this._onLocusEvent(event));
   },
 
   /**
    * Determines if the {@link call:incoming} event should be emitted for the
-   * specifed {@link Types~MercuryEvent}
+   * specified {@link Types~MercuryEvent}
    * @emits call:incoming
    * @instance
    * @memberof Phone
@@ -183,7 +197,6 @@ const Phone = SparkPlugin.extend({
    * @returns {Call}
    */
   dial(dialString, options) {
-    // TODO call register if it has not been called.
     const call = Call.make({}, {parent: this.spark});
 
     call.dial(dialString, options);

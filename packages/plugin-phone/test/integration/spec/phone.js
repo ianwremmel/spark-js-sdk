@@ -282,7 +282,6 @@ describe(`plugin-phone`, function() {
         .catch((reason) => console.warn(`failed to end call`, reason))
         .then(() => {call = undefined;})));
 
-      // TODO make this preventable
       it(`fetches active calls`, () => {
         call = spock.spark.phone.dial(kirk.email);
         // use change:locus as the trigger for determining when the post to

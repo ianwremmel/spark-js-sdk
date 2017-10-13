@@ -1,7 +1,20 @@
+const dotenv = require(`dotenv`);
 const glob = require(`glob`);
 const path = require(`path`);
+const webpack = require(`webpack`);
+
+dotenv.config({path: `.env.default`});
+dotenv.config();
 
 module.exports = {
+  plugins: [
+    new webpack.EnvironmentPlugin([
+      `CISCOSPARK_CLIENT_ID`,
+      `CISCOSPARK_REDIRECT_URI`,
+      `CISCOSPARK_APPID_ORGID`,
+      `CISCOSPARK_SCOPE`
+    ])
+  ],
   entry: `./packages/node_modules/ciscospark`,
   output: {
     filename: `bundle.js`,

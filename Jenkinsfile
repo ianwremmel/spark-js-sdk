@@ -1,5 +1,4 @@
 def IS_VALIDATED_MERGE_BUILD = false
-def HAS_LEGACY_CHANGES
 skipTests = false
 
 def warn = { msg ->
@@ -221,14 +220,6 @@ ansiColor('xterm') {
                 error(currentBuild.description)
               }
 
-              try {
-                sh 'git diff --name-only upstream/master | grep -v src/version.js | grep -e ^src'
-                HAS_LEGACY_CHANGES = true
-              }
-              catch (error) {
-                HAS_LEGACY_CHANGES = false
-              }
-
               sh 'git checkout upstream/master'
               try {
                 sh "git merge --ff ${GIT_COMMIT}"
@@ -355,6 +346,11 @@ ansiColor('xterm') {
                 timeout(60) {
                   def exitCode = sh script: "./tooling/test.sh", returnStatus: true
 
+                  image.inside(DOCKER_RUN_OPTS) {
+                    echo 'Testing samples'
+                    sh 'npm run test:samples'
+                  }
+
                   junit 'reports/junit/**/*.xml'
 
                   if (currentBuild.result == 'SUCCESS' && exitCode != 0) {
@@ -402,38 +398,6 @@ ansiColor('xterm') {
                   sh 'npm run build'
 
                   sh "npm run tooling -- version set ${version} --last-log"
-
-                  if (HAS_LEGACY_CHANGES) {
-                    try {
-                      sh 'mv .git/hooks/pre-commit .git/hooks/pre-commit.bak'
-                    }
-                    catch (error) {
-                      // this is fine
-                    }
-
-                    try {
-                      sh 'mv .git/hooks/commit-msg .git/hooks/commit-msg.bak'
-                    }
-                    catch (error) {
-                      // this is fine
-                    }
-
-                    sh 'npm run grunt -- release'
-
-                    try {
-                      sh 'mv .git/hooks/pre-commit.bak .git/hooks/pre-commit'
-                    }
-                    catch (error) {
-                      // this is fine
-                    }
-
-                    try {
-                      sh 'mv .git/hooks/commit-msg.bak .git/hooks/commit-msg'
-                    }
-                    catch (error) {
-                      // this is fine
-                    }
-                  }
 
                   sh 'git add packages/node_modules/*/package.json packages/node_modules/@ciscospark/*/package.json'
 
@@ -564,18 +528,6 @@ ansiColor('xterm') {
                 // if (!exitStatus) {
                 //   warn('failed to push to github enterprise')
                 // }
-              }
-
-              stage('publish to artifactory') {
-                if (HAS_LEGACY_CHANGES) {
-                  // using a downstream job because (a) we're going to stop
-                  // publishing to artifactory once the legacy sdk goes away and
-                  // (b) the npm secret is only recorded in that job.
-                  def artifactoryBuild = build job: 'spark-js-sdk--publish-to-artifactory', propagate: false
-                  if (artifactoryBuild.result != 'SUCCESS') {
-                    currentBuild.description += 'waring: failed to publish to Artifactory'
-                  }
-                }
               }
             }
           }

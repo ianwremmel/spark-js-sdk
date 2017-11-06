@@ -92,7 +92,7 @@ for SUITE_ITERATION in $(seq 1 "${MAX_TEST_SUITE_RETRIES}"); do
       set +e
       daemon -U --name sauce_connect -- "${SC_BINARY}" \
         -B *.wbx2.com,*.ciscospark.com,idbroker.webex.com,127.0.0.1,localhost \
-        -t internal-testing-services.wbx2.com,127.0.0.1,localhost \
+        -t whistler.onint.ciscospark.com,internal-testing-services.wbx2.com,127.0.0.1,localhost,calendar-whistler.onint.ciscospark.com \
         -vv \
         -l "$(pwd)/reports/sauce/sauce_connect.$(echo "${PACKAGE}" | awk -F '/' '{ print $NF }').${SC_ITERATION}.log" \
         --tunnel-identifier "${SC_TUNNEL_IDENTIFIER}" \
@@ -138,13 +138,7 @@ for SUITE_ITERATION in $(seq 1 "${MAX_TEST_SUITE_RETRIES}"); do
   echo "" >> "${GRUNT_LOG_FILE}"
   echo "### Attempt ${SUITE_ITERATION} ###" >> "${GRUNT_LOG_FILE}"
   echo "" >> "${GRUNT_LOG_FILE}"
-  if [ "${PACKAGE}" == "legacy-node" ]; then
-    npm run test:legacy-node >> "${GRUNT_LOG_FILE}" 2>&1
-  elif [ "${PACKAGE}" == "legacy-browser" ]; then
-    npm run test:legacy-browser >> "${GRUNT_LOG_FILE}" 2>&1
-  else
-    npm run test >> "${GRUNT_LOG_FILE}" 2>&1
-  fi
+  npm run test >> "${GRUNT_LOG_FILE}" 2>&1
   EXIT_CODE=$?
   set -e
 

@@ -32,28 +32,23 @@ module.exports = {
       else {
         packages = await updated({dependents: true});
       }
-      // We don't want to run legacy tests in validated merge
-      packages = packages.filter((p) => p !== `legacy`);
     }
     else {
       packages = await list();
-      if (forpipeline) {
-        packages.push(`legacy`);
-      }
     }
 
     if (forpipeline || fortests) {
-      if (packages.includes(`legacy`)) {
-        packages = packages.filter((p) => p !== `legacy`);
-        packages.push(`legacy-node`);
-        packages.push(`legacy-browser`);
-      }
-
       packages = packages
         .filter((p) => !p.includes(`bin-`))
         .filter((p) => !p.includes(`test-helper-`))
         .filter((p) => !p.includes(`eslint-config`))
         .filter((p) => !p.includes(`xunit-with-logs`));
+
+      if (forpipeline) {
+        packages = packages
+          .filter((p) => !p.includes(`media-engine-webrtc`))
+          .filter((p) => !p.includes(`media-adapter-webrtc`));
+      }
 
       // this array is ranked in the order of approximate slowness. At this
       // time, that order is based on eyeballing some xml files rather than

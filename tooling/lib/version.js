@@ -14,18 +14,44 @@ const git = require(`./git`);
 /* eslint-disable complexity */
 
 /**
+ * Recursive compareFunction for sorting version strings
+ * @param {number} l
+ * @param {Array<number>} left
+ * @param {number} r
+ * @param {Array<number>} right
+ * @returns {number}
+ */
+function compare([l, ...left], [r, ...right]) {
+  if (l < r) {
+    return -1;
+  }
+  if (l > r) {
+    return 1;
+  }
+
+  if (left.length === 0) {
+    return 0;
+  }
+
+  return compare(left, right);
+}
+
+/**
  * Determines the latest published package version for the repo
  * @returns {Promise<string>}
  */
 exports.last = async function last() {
   const packages = Array.from(await list());
-  const version = _(await Promise.all(packages
-    // TODO stop omitting eslint config once it's fully removed from the repo
-    .filter((p) => p !== `@ciscospark/eslint-config`)
-    .map(getDistTag)))
-    .sort()
+  const version = _(
+      await Promise.all(packages
+        // TODO stop omitting eslint config once it's fully removed from the repo
+        .filter((p) => p !== `@ciscospark/eslint-config`)
+        .map(getDistTag))
+    )
     .filter()
-    .map((v) => v.trim())
+    .map((v) => v.split(`.`).map((n) => parseInt(n, 10)))
+    .sort(compare)
+    .map((v) => v.join(`.`))
     // TODO stop omitting v2 packages once the last once is unpublished
     .filter((v) => !v.startsWith(`2.`))
     .last()
@@ -62,14 +88,14 @@ exports.next = async function next({always}) {
     debug(`no changes to make`);
     if (always) {
       const nextVersion = increment(`patch`, currentVersion);
-      debug(`next version is ${version}`);
+      debug(`next version is ${nextVersion}`);
       return nextVersion;
     }
     return currentVersion;
   }
 
   const nextVersion = increment(type, currentVersion);
-  debug(`next version is ${version}`);
+  debug(`next version is ${nextVersion}`);
   return nextVersion;
 };
 
@@ -82,8 +108,18 @@ exports.set = async function set(version, {all, lastLog}) {
   }
 
   // reminder, can't destructure updated because it's a circular dependency
-  const packages = Array.from(all ? await list() : await updated.updated({dependents: true}))
-    .filter((p) => ![`docs`, `legacy`, `tooling`].includes(p));
+
+  // First, get all the packages we should update
+  let packages = Array.from(all ? await list() : await updated.updated({dependents: true}));
+  // if we used updated() and it told us there's a tooling update, then there's
+  // a chance we changed a dependency or build rule, so we need to republish
+  // everything;
+  if (!all && packages.includes(`tooling`)) {
+    all = true;
+    packages = Array.from(await list());
+  }
+  // now, filter out the things that aren't really packages
+  packages = packages.filter((p) => ![`docs`, `legacy`, `tooling`].includes(p));
 
   if (packages.length === 0) {
     // eslint-disable-next-line no-console
@@ -167,6 +203,8 @@ async function getChangeType() {
  * @returns {string}
  */
 function increment(type, version) {
+  debug(`incrementing ${version} by ${type}`);
+
   let [major, minor, patch] = version
     .replace(`v`, ``)
     .split(`.`)
@@ -174,36 +212,36 @@ function increment(type, version) {
 
   if (major === 0) {
     switch (type) {
-    case `major`:
-      minor += 1;
-      patch = 0;
-      break;
-    case `minor`:
-      patch += 1;
-      break;
-    case `patch`:
-      patch += 1;
-      break;
-    default:
-      throw new Error(`unrecognized change type`);
+      case `major`:
+        minor += 1;
+        patch = 0;
+        break;
+      case `minor`:
+        patch += 1;
+        break;
+      case `patch`:
+        patch += 1;
+        break;
+      default:
+        throw new Error(`unrecognized change type`);
     }
   }
   else {
     switch (type) {
-    case `major`:
-      major += 1;
-      minor = 0;
-      patch = 0;
-      break;
-    case `minor`:
-      minor += 1;
-      patch = 0;
-      break;
-    case `patch`:
-      patch += 1;
-      break;
-    default:
-      throw new Error(`unrecognized change type`);
+      case `major`:
+        major += 1;
+        minor = 0;
+        patch = 0;
+        break;
+      case `minor`:
+        minor += 1;
+        patch = 0;
+        break;
+      case `patch`:
+        patch += 1;
+        break;
+      default:
+        throw new Error(`unrecognized change type`);
     }
   }
 
